@@ -19,7 +19,7 @@ gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -I$HOME/ca
 
 typedef int bool_t;
 
-int sendCommand()
+BMCRC sendCommand()
 {
 	// Initialize variables
 	DM hdm = {};
@@ -29,7 +29,7 @@ int sendCommand()
 	double *command;
 
 	// Open driver
-	char serial_number[12] = "B27BW027#081";
+	char serial_number[12] = "27BW027#081";
 	rv = BMCOpen(&hdm, serial_number);
 	// Check for errors
 	if(rv) {
@@ -81,5 +81,16 @@ int sendCommand()
 
 
 int main(int argc, char* argv[]) {
+
+	// initialize variables
+	BMCRC rv;
+
+	// send command
+	rv = sendCommand();
+	if (rv) {
+		printf("Error %d sending voltages.\n", rv);
+		return rv;
+	}
+
 	return 0;
 }
