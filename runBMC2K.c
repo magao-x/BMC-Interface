@@ -19,6 +19,65 @@ gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -I$HOME/ca
 
 typedef int bool_t;
 
+// interrupt signal handling for safe DM shutdown
+volatile sig_atomic_t stop;
+
+void handle_signal(int signal)
+{
+    if (signal == SIGINT)
+    {
+        printf("\nExiting the BMC 2K control loop.\n");
+        stop = 1;
+    }
+}
+
+// Initialize the shared memory image
+void initializeSharedMemory(char * serial, UInt nbAct)
+{
+    long naxis; // number of axis
+    uint8_t atype;     // data type
+    uint32_t *imsize;  // image size 
+    int shared;        // 1 if image in shared memory
+    int NBkw;          // number of keywords supported
+    IMAGE* SMimage;
+
+    SMimage = (IMAGE*) malloc(sizeof(IMAGE));
+
+    naxis = 2;
+    imsize = (uint32_t *) malloc(sizeof(uint32_t)*naxis);
+    imsize[0] = nbAct;
+    imsize[1] = 1;
+    
+    // image will be float type
+    // see file ImageStruct.h for list of supported types
+    atype = _DATATYPE_DOUBLE;
+    // image will be in shared memory
+    shared = 1;
+    // allocate space for 10 keywords
+    NBkw = 10;
+    // create an image in shared memory
+    ImageStreamIO_createIm(&SMimage[0], serial, naxis, imsize, atype, shared, NBkw);
+
+    /* flush all semaphores to avoid commanding the DM from a 
+    backlog in shared memory */
+    ImageStreamIO_semflush(&SMimage[0], -1);
+    
+    // write 0s to the image
+    SMimage[0].md[0].write = 1; // set this flag to 1 when writing data
+    int i;
+    for (i = 0; i < nbAct; i++)
+    {
+      SMimage[0].array.D[i] = 0.;
+    }
+
+    // post all semaphores
+    ImageStreamIO_sempost(&SMimage[0], -1);
+        
+    SMimage[0].md[0].write = 0; // Done writing data
+    SMimage[0].md[0].cnt0++;
+    SMimage[0].md[0].cnt1++;
+}
+
 BMCRC sendCommand()
 {
 	// Initialize variables
@@ -79,13 +138,32 @@ BMCRC sendCommand()
 	return 0;
 }
 
+// intialize DM and shared memory and enter DM command loop
+int controlLoop() {
+
+	// Initialize DM (move from sendCommand)
+
+	// Initialize Shared Memory
+
+	// Enter control loop
+		// semwait
+	    // send command
+	    // catch interrupt
+
+	// Safe shutdown
+
+	return 0;
+}
+
 
 int main(int argc, char* argv[]) {
+
+	// add bias, etc. options here
 
 	// initialize variables
 	BMCRC rv;
 
-	// send command
+	// send command (change to control loop)
 	rv = sendCommand();
 	if (rv) {
 		printf("Error %d sending voltages.\n", rv);
