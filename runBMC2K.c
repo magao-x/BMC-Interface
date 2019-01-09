@@ -80,95 +80,95 @@ void initializeSharedMemory(char * serial, UInt nbAct)
 
 BMCRC sendCommand()
 {
-	// Initialize variables
-	DM hdm = {};
-	BMCRC rv;
-	int k=0;
-	uint32_t *map_lut;
-	double *command;
+    // Initialize variables
+    DM hdm = {};
+    BMCRC rv;
+    int k=0;
+    uint32_t *map_lut;
+    double *command;
 
-	// Open driver
-	char serial_number[12] = "27BW027#081";
-	rv = BMCOpen(&hdm, serial_number);
-	// Check for errors
-	if(rv) {
-		printf("Error %d opening the driver type %u.\n", rv, (unsigned int)hdm.Driver_Type);
-		printf("%s\n\n", BMCErrorString(rv));
-		return rv;
-	}
+    // Open driver
+    char serial_number[12] = "27BW027#081";
+    rv = BMCOpen(&hdm, serial_number);
+    // Check for errors
+    if(rv) {
+        printf("Error %d opening the driver type %u.\n", rv, (unsigned int)hdm.Driver_Type);
+        printf("%s\n\n", BMCErrorString(rv));
+        return rv;
+    }
 
-	printf("Opened Device %d with %d actuators.\n", hdm.DevId, hdm.ActCount);
+    printf("Opened Device %d with %d actuators.\n", hdm.DevId, hdm.ActCount);
 
-	// Load actuator map
+    // Load actuator map
     map_lut = (uint32_t *)malloc(sizeof(uint32_t)*MAX_DM_SIZE);
     for(k=0; k<(int)hdm.ActCount; k++) {
         map_lut[k] = 0;
     }
     rv = BMCLoadMap(&hdm, NULL, map_lut);
 
-	// Make up an arbitrary command for now
+    // Make up an arbitrary command for now
     command = (double *)calloc(hdm.ActCount, sizeof(double));
-	for(k=0; k<hdm.ActCount; k++) {
-		command[k] = 0.5;
-	}
+    for(k=0; k<hdm.ActCount; k++) {
+        command[k] = 0.5;
+    }
 
-	// Send command
-	rv = BMCSetArray(&hdm, command, map_lut);
-	// Check for errors
-	if(rv) {
-		printf("Error %d sending voltages.\n", rv);
-		return rv;
-	}
+    // Send command
+    rv = BMCSetArray(&hdm, command, map_lut);
+    // Check for errors
+    if(rv) {
+        printf("Error %d sending voltages.\n", rv);
+        return rv;
+    }
 
-	// Zero the DM and close.
-	rv = BMCClearArray(&hdm);
-	if (rv) {
-		printf("Error %d clearing voltages.\n", rv);
-		return rv;
-	}
-	rv = BMCClose(&hdm);
-	if (rv) {
-		printf("Error %d closing the driver.\n", rv);
-		return rv;
-	}
+    // Zero the DM and close.
+    rv = BMCClearArray(&hdm);
+    if (rv) {
+        printf("Error %d clearing voltages.\n", rv);
+        return rv;
+    }
+    rv = BMCClose(&hdm);
+    if (rv) {
+        printf("Error %d closing the driver.\n", rv);
+        return rv;
+    }
 
-	// Clean up
-	free(command);
+    // Clean up
+    free(command);
 
-	return 0;
+    return 0;
 }
 
 // intialize DM and shared memory and enter DM command loop
 int controlLoop() {
 
-	// Initialize DM (move from sendCommand)
+    // Initialize DM (move from sendCommand)
 
-	// Initialize Shared Memory
+    // Initialize Shared Memory
 
-	// Enter control loop
-		// semwait
-	    // send command
-	    // catch interrupt
+    // Enter control loop
+        // semwait
+        // send command
+        // catch interrupt
 
-	// Safe shutdown
+    // Safe shutdown
 
-	return 0;
+    return 0;
 }
 
 
 int main(int argc, char* argv[]) {
 
-	// add bias, etc. options here
+    // add bias, etc. options here
 
-	// initialize variables
-	BMCRC rv;
+    // initialize variables
+    BMCRC rv;
 
-	// send command (change to control loop)
-	rv = sendCommand();
-	if (rv) {
-		printf("Error %d sending voltages.\n", rv);
-		return rv;
-	}
+    // send command (change to control loop)
+    rv = sendCommand();
+    if (rv) {
+        printf("Error %d sending voltages.\n", rv);
+        return rv;
+    }
 
-	return 0;
+    return 0;
 }
