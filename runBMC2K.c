@@ -13,7 +13,7 @@ gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -I$HOME/ca
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
-#include <time.h>
+#include <signal.h>
 #include <curses.h>
 #include <unistd.h>
 
@@ -32,7 +32,7 @@ void handle_signal(int signal)
 }
 
 // Initialize the shared memory image
-void initializeSharedMemory(char * serial, UInt nbAct)
+void initializeSharedMemory(char * serial, uint32_t nbAct)
 {
     long naxis; // number of axis
     uint8_t atype;     // data type
@@ -78,14 +78,41 @@ void initializeSharedMemory(char * serial, UInt nbAct)
     SMimage[0].md[0].cnt1++;
 }
 
-BMCRC sendCommand()
-{
+BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage) {
+    // Initialize variables
+    double *command;
+    int k=0;
+    BMCRC rv;
+
+    // Cast to array type ALPAO expects
+    command = (double*)calloc(hdm.ActCount, sizeof(double));
+    for (k = 0; k < hdm.ActCount; k++) {
+        command[k] = SMimage[0].array.D[k];
+    }
+
+    // Send command
+    rv = BMCSetArray(&hdm, command, map_lut);
+    // Check for errors
+    if(rv) {
+        printf("Error %d sending voltages.\n", rv);
+        return rv;
+    }
+
+    // Clean up
+    free(command);
+
+    return 0;
+}
+
+// intialize DM and shared memory and enter DM command loop
+int controlLoop() {
+
     // Initialize variables
     DM hdm = {};
     BMCRC rv;
     int k=0;
     uint32_t *map_lut;
-    double *command;
+    IMAGE * SMimage;
 
     // Open driver
     char serial_number[12] = "27BW027#081";
@@ -106,52 +133,68 @@ BMCRC sendCommand()
     }
     rv = BMCLoadMap(&hdm, NULL, map_lut);
 
-    // Make up an arbitrary command for now
-    command = (double *)calloc(hdm.ActCount, sizeof(double));
-    for(k=0; k<hdm.ActCount; k++) {
-        command[k] = 0.5;
+    // initialize shared memory image to 0s
+    initializeSharedMemory(serial_number, hdm.ActCount);
+
+    // connect to shared memory image (SMimage)
+    SMimage = (IMAGE*) malloc(sizeof(IMAGE));
+    ImageStreamIO_read_sharedmem_image_toIMAGE(serial_number, &SMimage[0]);
+
+    // Validate SMimage dimensionality and size against DM
+    if (SMimage[0].md[0].naxis != 2) {
+        printf("SM image naxis = %d\n", SMimage[0].md[0].naxis);
+        return -1;
+    }
+    if (SMimage[0].md[0].size[0] != hdm.ActCount) {
+        printf("SM image size (axis 1) = %d", SMimage[0].md[0].size[0]);
+        return -1;
     }
 
-    // Send command
-    rv = BMCSetArray(&hdm, command, map_lut);
-    // Check for errors
-    if(rv) {
-        printf("Error %d sending voltages.\n", rv);
+    // set DM to all-0 state to begin
+    printf("BMC %s: initializing all actuators to 0.\n", serial_number);
+    ImageStreamIO_semwait(&SMimage[0], 0);
+    rv  = sendCommand(hdm, map_lut, SMimage);
+    if (rv) {
+        printf("Error %d sending command.\n", rv);
         return rv;
     }
 
-    // Zero the DM and close.
+    // SIGINT handling
+    struct sigaction action;
+    action.sa_flags = SA_SIGINFO;
+    action.sa_handler = handle_signal;
+    sigaction(SIGINT, &action, NULL);
+    stop = 0;
+
+    // control loop
+    while (!stop) {
+        printf("BMC %s: waiting on commands.\n", serial_number);
+        // Wait on semaphore update
+        ImageStreamIO_semwait(&SMimage[0], 0);
+        
+        // Send Command to DM
+        if (!stop) { // Skip DM on interrupt signal
+            rv = sendCommand(hdm, map_lut, SMimage);
+            if (rv) {
+                printf("Error %d sending command.\n", rv);
+                return rv;
+            }
+        }
+    }
+
+    // Safe DM shutdown on loop interrupt
+    // Zero all actuators
     rv = BMCClearArray(&hdm);
     if (rv) {
         printf("Error %d clearing voltages.\n", rv);
         return rv;
     }
+    // Close the connection
     rv = BMCClose(&hdm);
     if (rv) {
         printf("Error %d closing the driver.\n", rv);
         return rv;
     }
-
-    // Clean up
-    free(command);
-
-    return 0;
-}
-
-// intialize DM and shared memory and enter DM command loop
-int controlLoop() {
-
-    // Initialize DM (move from sendCommand)
-
-    // Initialize Shared Memory
-
-    // Enter control loop
-        // semwait
-        // send command
-        // catch interrupt
-
-    // Safe shutdown
-
     return 0;
 }
 
@@ -160,13 +203,9 @@ int main(int argc, char* argv[]) {
 
     // add bias, etc. options here
 
-    // initialize variables
-    BMCRC rv;
-
-    // send command (change to control loop)
-    rv = sendCommand();
+    BMCRC rv = controlLoop();
     if (rv) {
-        printf("Error %d sending voltages.\n", rv);
+        printf("Encounted error %d.\n", rv);
         return rv;
     }
 
