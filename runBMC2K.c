@@ -189,12 +189,14 @@ int controlLoop() {
         printf("Error %d clearing voltages.\n", rv);
         return rv;
     }
+    printf("BMC %s: all voltages set to 0.\n", serial_number);
     // Close the connection
     rv = BMCClose(&hdm);
     if (rv) {
         printf("Error %d closing the driver.\n", rv);
         return rv;
     }
+    printf("BMC %s: connection closed.\n", serial_number);
     return 0;
 }
 
