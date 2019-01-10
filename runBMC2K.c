@@ -1,6 +1,6 @@
 /*
 To compile:
-gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -I$HOME/cacao/lib -L/opt/Boston\ Micromachines/lib -Wl,-rpath-link,/opt/Boston\ Micromachines/lib -lBMC -lBMC_PCIeAPI -lncurses -lImageStreamIO
+gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -L/opt/Boston\ Micromachines/lib -Wl,-rpath-link,/opt/Boston\ Micromachines/lib -lBMC -lBMC_PCIeAPI -lncurses -lImageStreamIO -lpthread
 */
 
 /* BMC */
@@ -32,7 +32,7 @@ void handle_signal(int signal)
 }
 
 // Initialize the shared memory image
-void initializeSharedMemory(char * serial, uint32_t nbAct)
+void initializeSharedMemory(char * serial, int nbAct)
 {
     long naxis; // number of axis
     uint8_t atype;     // data type
@@ -81,13 +81,13 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
 BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage) {
     // Initialize variables
     double *command;
-    int k=0;
+    int idx;
     BMCRC rv;
 
     // Cast to array type ALPAO expects
-    command = (double*)calloc(hdm.ActCount, sizeof(double));
-    for (k = 0; k < hdm.ActCount; k++) {
-        command[k] = SMimage[0].array.D[k];
+    command = (double*)calloc((int)hdm.ActCount, sizeof(double));
+    for (idx = 0; idx < (int)hdm.ActCount; idx++) {
+        command[idx] = SMimage[0].array.D[idx];
     }
 
     // Send command
@@ -110,7 +110,7 @@ int controlLoop() {
     // Initialize variables
     DM hdm = {};
     BMCRC rv;
-    int k=0;
+    int idx;
     uint32_t *map_lut;
     IMAGE * SMimage;
 
@@ -128,13 +128,13 @@ int controlLoop() {
 
     // Load actuator map
     map_lut = (uint32_t *)malloc(sizeof(uint32_t)*MAX_DM_SIZE);
-    for(k=0; k<(int)hdm.ActCount; k++) {
-        map_lut[k] = 0;
+    for(idx=0; idx<(int)hdm.ActCount; idx++) {
+        map_lut[idx] = 0;
     }
     rv = BMCLoadMap(&hdm, NULL, map_lut);
 
     // initialize shared memory image to 0s
-    initializeSharedMemory(serial_number, hdm.ActCount);
+    initializeSharedMemory(serial_number, (int)hdm.ActCount);
 
     // connect to shared memory image (SMimage)
     SMimage = (IMAGE*) malloc(sizeof(IMAGE));
