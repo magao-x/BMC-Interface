@@ -56,7 +56,7 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     // allocate space for 10 keywords
     NBkw = 10;
     // create an image in shared memory
-    ImageStreamIO_createIm(&SMimage[0], serial, naxis, imsize, atype, shared, NBkw);
+    ImageStreamIO_createIm(&SMimage[0], "test", naxis, imsize, atype, shared, NBkw);
 
     /* flush all semaphores to avoid commanding the DM from a 
     backlog in shared memory */
@@ -134,7 +134,7 @@ int controlLoop() {
     rv = BMCLoadMap(&hdm, NULL, map_lut);
 
     // initialize shared memory image to 0s
-    initializeSharedMemory(serial_number, hdm.ActCount);
+    initializeSharedMemory("test", hdm.ActCount);
 
     // connect to shared memory image (SMimage)
     SMimage = (IMAGE*) malloc(sizeof(IMAGE));
@@ -205,7 +205,7 @@ int main(int argc, char* argv[]) {
 
     BMCRC rv = controlLoop();
     if (rv) {
-        printf("Encounted error %d.\n", rv);
+        printf("Encountered error %d.\n", rv);
         return rv;
     }
 
