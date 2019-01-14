@@ -153,8 +153,8 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias) {
         printf("Act %d: %f\n", idx, command[idx]);
     }
 
-    // Send command
-    rv = BMCSetArray(&hdm, command, map_lut);
+    // Send command (expected as double)
+    rv = BMCSetArray(&hdm, (double *)command, map_lut);
     // Check for errors
     if(rv) {
         printf("Error %d sending voltages.\n", rv);
