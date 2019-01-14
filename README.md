@@ -11,7 +11,7 @@ To enter the control loop with the default settings:
     
 This creates a shared memory image of the name <DM serial number> which can be updated via cacao. Inputs are expected as single-precision floats between 0 and 1 (normalized voltage). `ctrl+c` will exit the loop and safely reset and release the DM.
   
-To run with biasing disable:
+To run with biasing disabled:
 
     ./runBMC2K "<DM serial number>" --nobias
     
