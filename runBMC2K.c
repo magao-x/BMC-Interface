@@ -52,7 +52,7 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     
     // image will be float type
     // see file ImageStruct.h for list of supported types
-    atype = _DATATYPE_DOUBLE;
+    atype = _DATATYPE_FLOAT;
     // image will be in shared memory
     shared = 1;
     // allocate space for 10 keywords
@@ -69,7 +69,7 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     int i;
     for (i = 0; i < nbAct; i++)
     {
-      SMimage[0].array.D[i] = 0.;
+      SMimage[0].array.F[i] = 0.;
     }
 
     // post all semaphores
@@ -81,11 +81,11 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
 }
 
 /* Remove DC bias in inputs to maximize actuator range */
-void bias_inputs(double * command, uint32_t ActCount)
+void bias_inputs(float * command, uint32_t ActCount)
 {
     int idx;
-    double mean;
-    double cenval;
+    float mean;
+    float cenval;
 
     // calculate mean value
     mean = 0;
@@ -109,7 +109,7 @@ void bias_inputs(double * command, uint32_t ActCount)
 
 /* Convert any DM inputs to [0, 1] to avoid 
 exceeding safe DM operation. */
-void clip_to_limits(double * command, uint32_t ActCount)
+void clip_to_limits(float * command, uint32_t ActCount)
 {
     int idx;
     // check each actuator and clip if needed
@@ -129,14 +129,14 @@ void clip_to_limits(double * command, uint32_t ActCount)
 
 BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias) {
     // Initialize variables
-    double *command;
+    float *command;
     int idx;
     uint32_t ActCount;
     BMCRC rv;
 
     // Cast to array type ALPAO expects
     ActCount = (uint32_t)hdm.ActCount;
-    command = (double*)calloc(ActCount, sizeof(double));
+    command = (float*)calloc(ActCount, sizeof(float));
     for (idx = 0; idx < ActCount; idx++) {
         command[idx] = SMimage[0].array.D[idx];
     }
