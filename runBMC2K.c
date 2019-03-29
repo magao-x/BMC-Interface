@@ -1,6 +1,9 @@
 /*
 To compile:
-gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -L/opt/Boston\ Micromachines/lib -Wl,-rpath-link,/opt/Boston\ Micromachines/lib -lBMC -lBMC_PCIeAPI -lncurses -lImageStreamIO -lpthread -lrt -lm
+gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -L/opt/Boston\ Micromachines/lib -Wl,-rpath-link,/opt/Boston\ Micromachines/lib -lBMC -lBMC_PCIeAPI -lncurses -lImageStreamIO -lpthread -lrt -lm -lcfitsio
+
+To run:
+./runBMC2K <serial> <shared_memory_name> --bias <bias_value> --linear --fractional
 */
 
 /* BMC */
@@ -19,6 +22,9 @@ gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -L/opt/Bos
 #include <math.h>
 #include <argp.h>
 
+/* FITS */
+#include "fitsio.h"
+
 typedef int bool_t;
 
 // interrupt signal handling for safe DM shutdown
@@ -34,7 +40,7 @@ void handle_signal(int signal)
 }
 
 // Initialize the shared memory image
-void initializeSharedMemory(char * serial, uint32_t nbAct)
+void initializeSharedMemory(const char * shm_name, uint32_t ax1, uint32_t ax2)
 {
     long naxis; // number of axis
     uint8_t atype;     // data type
@@ -47,8 +53,8 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
 
     naxis = 2;
     imsize = (uint32_t *) malloc(sizeof(uint32_t)*naxis);
-    imsize[0] = nbAct;
-    imsize[1] = 1;
+    imsize[0] = ax1;
+    imsize[1] = ax2;
     
     // image will be float type
     // see file ImageStruct.h for list of supported types
@@ -58,7 +64,7 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     // allocate space for 10 keywords
     NBkw = 10;
     // create an image in shared memory
-    ImageStreamIO_createIm(&SMimage[0], serial, naxis, imsize, atype, shared, NBkw);
+    ImageStreamIO_createIm(&SMimage[0], shm_name, naxis, imsize, atype, shared, NBkw);
 
     /* flush all semaphores to avoid commanding the DM from a 
     backlog in shared memory */
@@ -67,7 +73,7 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     // write 0s to the image
     SMimage[0].md[0].write = 1; // set this flag to 1 when writing data
     int i;
-    for (i = 0; i < nbAct; i++)
+    for (i = 0; i < ax1*ax2; i++)
     {
       SMimage[0].array.F[i] = 0.;
     }
@@ -80,16 +86,35 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     SMimage[0].md[0].cnt1++;
 }
 
+/* BMC expects inputs between 0 and +1, but we'd like to provide
+stroke values in physical units. This function makes two conversions:
+1. It converts from microns of stroke to fractional voltage. 
+2. It normalizes inputs such that volume displaced by the requested command roughly
+matches the equivalent volume that would be displaced by a cuboid of dimensions
+actuator-pitch x actuator-pitch x normalized-stroke. This is a constant factor 
+that's found by calculating the volume under the DM influence function.
+
+This requires DM calibration.
+ */
+void scale_inputs(float * command, uint32_t ActCount, float scale)
+{
+    int idx;
+    // normalize each actuator stroke
+    for ( idx = 0 ; idx < ActCount ; idx++)
+    {
+        command[idx] *= scale;
+    }
+}
+
 /* Remove DC bias in inputs to maximize actuator range.
 There's something not quite right about my approach.
 Ex: requesting full stroke on one actuation only
 slightly changes the avg, so it gets clipped
 at some value very short of full stroke. */
-void bias_inputs(float * command, uint32_t ActCount)
+void bias_inputs(float * command, float bias, uint32_t ActCount)
 {
     int idx;
     float mean;
-    float cenval;
 
     // calculate mean value
     mean = 0;
@@ -98,17 +123,14 @@ void bias_inputs(float * command, uint32_t ActCount)
         mean += command[idx];
     }
     mean /= ActCount;
-    printf("I found a mean of: %f\n", mean);
 
     /* Remove mean from each actuator input
     and add voltage bias to center of range.
     */
-    cenval = 0.5;//sqrt(0.5);
     for ( idx = 0 ; idx < ActCount ; idx++)
     {
-        command[idx] += cenval - mean;
+        command[idx] += bias - mean;
     }
-    printf("Adding bias of: %f\n", cenval - mean);
 }
 
 /* Convert any DM inputs to [0, 1] to avoid 
@@ -131,47 +153,200 @@ void clip_to_limits(float * command, uint32_t ActCount)
     }
 }
 
-BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias, int rootvolt) {
+/* Read in a configuration file with user-calibrated
+values to determine the conversion from physical to
+fractional stroke as well as the volume displaced by
+the influence function. */
+int parse_calibration_file(const char * serial, float *act_gain, float *volume_factor)
+{
+    char * bmc_calib;
+    char calibpath[1000];
+    char serial_lc[1000];
+    FILE * fp;
+    char * line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    char * token;
+    float * calibvals;
+
+    // find calibration file location from bmc_calib env variable
+    bmc_calib = getenv("bmc_calib");
+    if (bmc_calib == NULL)
+    {
+        printf("'bmc_calib' environment variable not set!\n");
+        return -1;
+    }
+    strcpy(calibpath, bmc_calib);
+    strcat(calibpath,  "/bmc_2k_userconfig.txt");
+
+    // open file
+    fp = fopen(calibpath, "r");
+    if (fp == NULL)
+    {
+        printf("Could not read configuration file at %s!\n", calibpath);
+        return -1;
+    }
+
+    calibvals = (float*) malloc(2*sizeof(float));
+    int idx = 0;
+    while ((read = getline(&line, &len, fp)) != -1)
+    {
+        // grab first value from each line
+        calibvals[idx] = strtod(line, NULL);
+        idx++;
+    }
+
+    fclose(fp);
+
+    // assign stroke and volume factors
+    (*act_gain) = calibvals[0];
+    (*volume_factor) = calibvals[1];
+
+    printf("BMC %s: Using stroke and volume calibration from %s\n", serial, calibpath);
+    return 0;
+}
+
+int get_actuator_mapping(const char * serial_number, int nbAct, int * actuator_mapping)
+{
+    /* This function closely follows the CFITSIO imstat
+    example */
+
+    fitsfile *fptr;  /* FITS file pointer */
+    int status = 0;  /* CFITSIO status value MUST be initialized to zero! */
+    int hdutype, naxis, ii;
+    long naxes[2], totpix, fpixel[2];
+    int *pix;
+    int ij = 0; /* actuator mapping index */
+
+    char * bmc_calib;
+    char calibname[1000];
+    char calibpath[1000];
+
+    // get file path to actuator map
+    bmc_calib = getenv("bmc_calib");
+    strcpy(calibpath, bmc_calib);
+    sprintf(calibname, "/bmc_2k_actuator_mapping.fits");
+    strcat(calibpath, calibname);
+
+    if ( !fits_open_image(&fptr, calibpath, READONLY, &status) )
+    {
+      if (fits_get_hdu_type(fptr, &hdutype, &status) || hdutype != IMAGE_HDU) { 
+        printf("Error: this program only works on images, not tables\n");
+        return(1);
+      }
+
+      fits_get_img_dim(fptr, &naxis, &status);
+      fits_get_img_size(fptr, 2, naxes, &status);
+
+      if (status || naxis != 2) { 
+        printf("Error: NAXIS = %d.  Only 2-D images are supported.\n", naxis);
+        return(1);
+      }
+
+      pix = (int *) malloc(naxes[0] * sizeof(int)); /* memory for 1 row */
+
+      if (pix == NULL) {
+        printf("Memory allocation error\n");
+        return(1);
+      }
+
+      totpix = naxes[0] * naxes[1];
+      fpixel[0] = 1;  /* read starting with first pixel in each row */
+
+      /* process image one row at a time; increment row # in each loop */
+      //for (fpixel[1] = 1; fpixel[1] <= naxes[1]; fpixel[1]++)
+      for (fpixel[1] = naxes[1]; fpixel[1] >= 1; fpixel[1]--)
+      {  
+         /* give starting pixel coordinate and number of pixels to read */
+         if (fits_read_pix(fptr, TINT, fpixel, naxes[0],0, pix,0, &status))
+            break;   /* jump out of loop on error */
+
+         
+         for (ii = 0; ii < naxes[0]; ii++) {
+           if (pix[ii] > 0) {
+                // get indices of active actuators in order
+                actuator_mapping[ij] = (fpixel[1]-1) * naxes[0] + ii;
+                ij++;
+           }
+           else if (pix[ii] == -1) {
+                /* addressable but ignored actuators are handled here.
+                We still need to increment ij to count the active ones
+                properly, but we need a flag (-1) to know to skip these
+                later */
+                actuator_mapping[ij] = -1;
+                ij++;
+           }
+         }
+      }
+      fits_close_file(fptr, &status);
+    }
+
+    if (status)  {
+        fits_report_error(stderr, status); /* print any error message */
+    }
+
+    free(pix);
+
+    printf("BMC %s: Using actuator mapping from %s\n", serial_number, calibpath);
+    return 0;
+}
+
+BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, float bias, int linear, int fractional, float act_gain, float volume_factor, int * actuator_mapping) {
     // Initialize variables
     float *command;
     double *command_double;
-    int idx;
+    int idx, address;
     uint32_t ActCount;
     BMCRC rv;
 
-    // Cast to array type ALPAO expects
+    // Map from 2D cacao image to 1D command vector
     ActCount = (uint32_t)hdm.ActCount;
     command = (float*)calloc(ActCount, sizeof(float));
     for (idx = 0; idx < ActCount; idx++) {
-        command[idx] = SMimage[0].array.F[idx];
+         // use actuator mapping to pull correct element of shared memory image
+        address = actuator_mapping[idx];
+        if (address == -1) {
+            /* addressable but ignored actuators should
+            always be set to 0. */
+            command[idx] = 0.; 
+        }
+        else {
+            /* addressable and active actuators have an integer
+            address to their location in the command vector */
+            command[idx] = (float)SMimage[0].array.F[address];
+        }
+    }
+
+    // Convert stroke inputs from microns to fractional volts 
+    if (fractional == 0)
+    {
+        scale_inputs(command, ActCount, volume_factor / act_gain);
     }
 
     // Apply the bias
-    if (nobias != 1) {
-        bias_inputs(command, ActCount);
+    if (bias > 0.) {
+        bias_inputs(command, bias, ActCount);
     }
 
-    // Clip to limits
+    /* Clip to limits (must happen before square root to avoid
+    invalid entries) */
     clip_to_limits(command, ActCount);
 
     // Take the square root to linearize displacement
-    if (rootvolt == 1) {
+    if (linear == 0) {
         for (idx = 0; idx < ActCount; idx++) {
             command[idx] =  sqrt(command[idx]);
         }
     }
 
-    for (idx = 0; idx < ActCount; idx++) {
-        printf("Act %d: %f\n", idx, command[idx]);
-    }
-
-    // convert to double (there's probably a better way than this loop)
+    /* convert to double (there's probably a better way than this loop)
+    since that's what the BMC SDK expects */
     command_double = (double*)calloc(ActCount, sizeof(double));
     for (idx = 0; idx < ActCount; idx++) {
         command_double[idx] = (double)command[idx];
     }
 
-    // Send command (expected as double)
+    // Send command
     rv = BMCSetArray(&hdm, command_double, map_lut);
     // Check for errors
     if(rv) {
@@ -186,7 +361,7 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias, int ro
 }
 
 // intialize DM and shared memory and enter DM command loop
-int controlLoop(char * serial_number, int nobias, int rootvolt) {
+int controlLoop(const char * serial_number, const char * shm_name, float bias, int linear, int fractional) {
 
     // Initialize variables
     DM hdm = {};
@@ -195,6 +370,18 @@ int controlLoop(char * serial_number, int nobias, int rootvolt) {
     uint32_t ActCount;
     uint32_t *map_lut;
     IMAGE * SMimage;
+    int *actuator_mapping; // 50x50 image to 1D vector of commands
+    uint32_t shm_dim = 50; // Hard-coded for now
+
+    float act_gain, volume_factor; // calibration
+
+    /* get actuator gain and volume normalization factor from
+    the user-defined config file */
+    rv = parse_calibration_file(serial_number, &act_gain, &volume_factor);
+    if (rv == -1)
+    {
+        return -1;
+    }
 
     // Open driver
     //char serial_number[12] = "27BW027#081";
@@ -209,33 +396,42 @@ int controlLoop(char * serial_number, int nobias, int rootvolt) {
 
     printf("Opened Device %d with %d actuators.\n", hdm.DevId, ActCount);
 
-    // Load actuator map
+    // Load actuator map (BMC SDK specific)
     map_lut = (uint32_t *)malloc(sizeof(uint32_t)*MAX_DM_SIZE);
     for(idx=0; idx<ActCount; idx++) {
         map_lut[idx] = 0;
     }
     rv = BMCLoadMap(&hdm, NULL, map_lut);
 
+    /* get actuator mapping from 2D cacao image to 1D vector for
+    ALPAO input */
+    actuator_mapping = (int *) malloc(ActCount * sizeof(int)); /* memory for actuator mapping */
+    get_actuator_mapping(serial_number, ActCount, actuator_mapping);
+
     // initialize shared memory image to 0s
-    initializeSharedMemory(serial_number, ActCount);
+    initializeSharedMemory(shm_name, shm_dim, shm_dim);
     // connect to shared memory image (SMimage)
     SMimage = (IMAGE*) malloc(sizeof(IMAGE));
-    ImageStreamIO_read_sharedmem_image_toIMAGE(serial_number, &SMimage[0]);
+    ImageStreamIO_read_sharedmem_image_toIMAGE(shm_name, &SMimage[0]);
 
     // Validate SMimage dimensionality and size against DM
     if (SMimage[0].md[0].naxis != 2) {
         printf("SM image naxis = %d\n", SMimage[0].md[0].naxis);
         return -1;
     }
-    if (SMimage[0].md[0].size[0] != ActCount) {
+    if (SMimage[0].md[0].size[0] != shm_dim) {
         printf("SM image size (axis 1) = %d", SMimage[0].md[0].size[0]);
+        return -1;
+    }
+    if (SMimage[0].md[0].size[1] != shm_dim) {
+        printf("SM image size (axis 2) = %d", SMimage[0].md[0].size[1]);
         return -1;
     }
 
     // set DM to all-0 state to begin
     printf("BMC %s: initializing all actuators to 0.\n", serial_number);
     ImageStreamIO_semwait(&SMimage[0], 0);
-    rv  = sendCommand(hdm, map_lut, SMimage, nobias, rootvolt);
+    rv  = sendCommand(hdm, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping);
     if (rv) {
         printf("Error %d sending command.\n", rv);
         return rv;
@@ -256,7 +452,7 @@ int controlLoop(char * serial_number, int nobias, int rootvolt) {
         
         // Send Command to DM
         if (!stop) { // Skip DM on interrupt signal
-            rv = sendCommand(hdm, map_lut, SMimage, nobias, rootvolt);
+            rv = sendCommand(hdm, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping);
             if (rv) {
                 printf("Error %d sending command.\n", rv);
                 return rv;
@@ -282,31 +478,32 @@ int controlLoop(char * serial_number, int nobias, int rootvolt) {
     return 0;
 }
 
-
 /*
 Argument parsing
 */
 
 /* Program documentation. */
 static char doc[] =
-  "runBMC2K-- enter the BMC2K DM command loop and wait for milk shared memory images to be posted at <serial>";
+  "runBMC2K-- enter the BMC2K DM command loop and wait for cacao shared memory images to be posted at <shm_name>";
 
 /* A description of the arguments we accept. */
-static char args_doc[] = "serial";
+static char args_doc[] = "[serial] [shared memory name]";
 
 /* The options we understand. */
 static struct argp_option options[] = {
-  {"nobias",     'b', 0, 0,  "Disable automatically biasing the DM (enabled by default)" },
-  {"rootvolt",     'r', 0, 0,  "Take the square root of the input voltage to roughly linearize the displacement response." },
+  {"bias",       'b', "bias", 0,  "Remove mean from all commands and add a fixed bias level in fractional volts. By default, this is disabled and assumes the user will build the bias into the flat command. The bias is applied\
+  before the square root of inputs is taken (if enabled), so bias=0.5 -> 0.7 fractional volts." },
+  {"linear",     'l', 0,      0,  "By default, the square root of inputs is sent to the DM. Toggling 'linear' disables this." },
+  {"fractional", 'f', 0,      0,  "Disable multiplication by gain and volume factors. Toggling 'fractional' means commands are expected in the range [0,1]." },
   { 0 }
 };
 
 /* Used by main to communicate with parse_opt. */
 struct arguments
 {
-  char *args[1];                /* serial */
-  int nobias;
-  int rootvolt;
+  char *args[2];                /* serial shm_name*/
+  float bias;
+  int linear, fractional;
 };
 
 /* Parse a single option. */
@@ -319,13 +516,16 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state)
   switch (key)
     {
     case 'b':
-      arguments->nobias = 1;
+      arguments->bias = atof(arg);
       break;
-    case 'r':
-      arguments->rootvolt = 1;
+    case 'l':
+      arguments->linear = 1;
+      break;
+    case 'f':
+      arguments->fractional = 1;
       break;
     case ARGP_KEY_ARG:
-      if (state->arg_num >= 1)
+      if (state->arg_num >= 2)
         /* Too many arguments. */
         argp_usage (state);
 
@@ -334,7 +534,7 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state)
       break;
 
     case ARGP_KEY_END:
-      if (state->arg_num < 1)
+      if (state->arg_num < 2)
         /* Not enough arguments. */
         argp_usage (state);
       break;
@@ -354,14 +554,15 @@ int main(int argc, char* argv[]) {
     struct arguments arguments;
 
     /* Default values. */
-    arguments.nobias = 0;
-    arguments.rootvolt = 0;
+    arguments.bias = 0.0;
+    arguments.linear = 0;
+    arguments.fractional = 0;
 
     /* Parse our arguments; every option seen by parse_opt will
      be reflected in arguments. */
     argp_parse (&argp, argc, argv, 0, 0, &arguments);
 
-    BMCRC rv = controlLoop(arguments.args[0], arguments.nobias, arguments.rootvolt);
+    BMCRC rv = controlLoop(arguments.args[0], arguments.args[1], arguments.bias, arguments.linear, arguments.fractional);
     if (rv) {
         printf("Encountered error %d.\n", rv);
         return rv;
