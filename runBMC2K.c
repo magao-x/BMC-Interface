@@ -80,7 +80,11 @@ void initializeSharedMemory(char * serial, uint32_t nbAct)
     SMimage[0].md[0].cnt1++;
 }
 
-/* Remove DC bias in inputs to maximize actuator range */
+/* Remove DC bias in inputs to maximize actuator range.
+There's something not quite right about my approach.
+Ex: requesting full stroke on one actuation only
+slightly changes the avg, so it gets clipped
+at some value very short of full stroke. */
 void bias_inputs(float * command, uint32_t ActCount)
 {
     int idx;
@@ -99,12 +103,12 @@ void bias_inputs(float * command, uint32_t ActCount)
     /* Remove mean from each actuator input
     and add voltage bias to center of range.
     */
-    cenval = sqrt(0.5);
+    cenval = 0.5;//sqrt(0.5);
     for ( idx = 0 ; idx < ActCount ; idx++)
     {
         command[idx] += cenval - mean;
     }
-    printf("Adding bias of: %f\n", cenval);
+    printf("Adding bias of: %f\n", cenval - mean);
 }
 
 /* Convert any DM inputs to [0, 1] to avoid 
@@ -127,7 +131,7 @@ void clip_to_limits(float * command, uint32_t ActCount)
     }
 }
 
-BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias) {
+BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias, int rootvolt) {
     // Initialize variables
     float *command;
     double *command_double;
@@ -149,6 +153,13 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias) {
 
     // Clip to limits
     clip_to_limits(command, ActCount);
+
+    // Take the square root to linearize displacement
+    if (rootvolt == 1) {
+        for (idx = 0; idx < ActCount; idx++) {
+            command[idx] =  sqrt(command[idx]);
+        }
+    }
 
     for (idx = 0; idx < ActCount; idx++) {
         printf("Act %d: %f\n", idx, command[idx]);
@@ -175,7 +186,7 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, int nobias) {
 }
 
 // intialize DM and shared memory and enter DM command loop
-int controlLoop(char * serial_number, int nobias) {
+int controlLoop(char * serial_number, int nobias, int rootvolt) {
 
     // Initialize variables
     DM hdm = {};
@@ -224,7 +235,7 @@ int controlLoop(char * serial_number, int nobias) {
     // set DM to all-0 state to begin
     printf("BMC %s: initializing all actuators to 0.\n", serial_number);
     ImageStreamIO_semwait(&SMimage[0], 0);
-    rv  = sendCommand(hdm, map_lut, SMimage, nobias);
+    rv  = sendCommand(hdm, map_lut, SMimage, nobias, rootvolt);
     if (rv) {
         printf("Error %d sending command.\n", rv);
         return rv;
@@ -245,7 +256,7 @@ int controlLoop(char * serial_number, int nobias) {
         
         // Send Command to DM
         if (!stop) { // Skip DM on interrupt signal
-            rv = sendCommand(hdm, map_lut, SMimage, nobias);
+            rv = sendCommand(hdm, map_lut, SMimage, nobias, rootvolt);
             if (rv) {
                 printf("Error %d sending command.\n", rv);
                 return rv;
@@ -286,6 +297,7 @@ static char args_doc[] = "serial";
 /* The options we understand. */
 static struct argp_option options[] = {
   {"nobias",     'b', 0, 0,  "Disable automatically biasing the DM (enabled by default)" },
+  {"rootvolt",     'r', 0, 0,  "Take the square root of the input voltage to roughly linearize the displacement response." },
   { 0 }
 };
 
@@ -294,6 +306,7 @@ struct arguments
 {
   char *args[1];                /* serial */
   int nobias;
+  int rootvolt;
 };
 
 /* Parse a single option. */
@@ -307,6 +320,9 @@ static error_t parse_opt (int key, char *arg, struct argp_state *state)
     {
     case 'b':
       arguments->nobias = 1;
+      break;
+    case 'r':
+      arguments->rootvolt = 1;
       break;
     case ARGP_KEY_ARG:
       if (state->arg_num >= 1)
@@ -339,12 +355,13 @@ int main(int argc, char* argv[]) {
 
     /* Default values. */
     arguments.nobias = 0;
+    arguments.rootvolt = 0;
 
     /* Parse our arguments; every option seen by parse_opt will
      be reflected in arguments. */
     argp_parse (&argp, argc, argv, 0, 0, &arguments);
 
-    BMCRC rv = controlLoop(arguments.args[0], arguments.nobias);
+    BMCRC rv = controlLoop(arguments.args[0], arguments.nobias, arguments.rootvolt);
     if (rv) {
         printf("Encountered error %d.\n", rv);
         return rv;
