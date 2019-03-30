@@ -1,4 +1,4 @@
-#Usage: ./loadfits /path/to/fitsfile.fits serial
+#usage: ./loadfits /path/to/fitsfile.fits <shared memory name>
 cacao << EOF
 loadfits "$1" im
 readshmim "$2"

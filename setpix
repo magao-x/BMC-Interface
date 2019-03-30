@@ -1,8 +1,8 @@
-#Usage: ./setpix val actnum serial
+#Usage: ./setpix val x y serial
 cacao << EOF
-readshmim "$3"
-creaim im1 2040 1
-setpix im1 $1 $2 0 
-cp im1 "$3"
+readshmim "$4"
+creaim im1 50 50
+setpix im1 $1 $2 $3
+cp im1 "$4"
 exit
 EOF
