@@ -9,7 +9,7 @@ To enter the control loop with the default settings:
 
     ./runBMC2K "<DM serial number>" <shared memory image>
     
-This connects to the DM and creates a shared memory image which can be updated via cacao. Inputs are expected as single-precision floats between 0 and 1 (normalized voltage). `ctrl+c` will exit the loop and safely reset and release the DM.
+This connects to the DM and creates a shared memory image which can be updated via cacao. Inputs are expected as single-precision floats in a 50x50 array in units of microns. `ctrl+c` will interrupt the control loop and safely reset and release the DM.
   
 To run with mean-subtraction and a fixed bias (given in fractional volts between 0 and 1):
 
