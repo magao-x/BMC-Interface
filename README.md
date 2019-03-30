@@ -29,7 +29,7 @@ For help:
     
 Before running, set the path to a user configuration directory
 
-    export bmc_calib=$/some/path/
+    export bmc_calib=/some/path/
 
 which should contain:
 
