@@ -27,11 +27,11 @@ For help:
 
     ./runBMC2K --help
     
-Before running, set the path to a user configuration file
+Before running, set the path to a user configuration directory
 
     export bmc_calib=$/some/path/
 
-where the bmc_calib directory contains:
+which should contain:
 
     bmc_2k_actuator_mapping.fits #2D image of actuator positions
     bmc_2k_actuator_mask.fits #2D binary image of active/inactive actuators
