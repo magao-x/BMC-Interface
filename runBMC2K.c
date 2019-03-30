@@ -254,8 +254,7 @@ int get_actuator_mapping(const char * serial_number, int nbAct, int * actuator_m
       fpixel[0] = 1;  /* read starting with first pixel in each row */
 
       /* process image one row at a time; increment row # in each loop */
-      //for (fpixel[1] = 1; fpixel[1] <= naxes[1]; fpixel[1]++)
-      for (fpixel[1] = naxes[1]; fpixel[1] >= 1; fpixel[1]--)
+      for (fpixel[1] = 1; fpixel[1] <= naxes[1]; fpixel[1]++)
       {  
          /* give starting pixel coordinate and number of pixels to read */
          if (fits_read_pix(fptr, TINT, fpixel, naxes[0],0, pix,0, &status))
@@ -265,17 +264,11 @@ int get_actuator_mapping(const char * serial_number, int nbAct, int * actuator_m
          for (ii = 0; ii < naxes[0]; ii++) {
            if (pix[ii] > 0) {
                 // get indices of active actuators in order
-                actuator_mapping[ij] = (fpixel[1]-1) * naxes[0] + ii;
-                ij++;
+                // ij-th pixels maps to actuator pix[ii]
+                actuator_mapping[pix[ii] - 1] = ij;//(fpixel[1]-1) * naxes[0] + ii;
+                //printf("Actuator %d at address %d\n", pix[ii] - 1, ij);
            }
-           else if (pix[ii] == -1) {
-                /* addressable but ignored actuators are handled here.
-                We still need to increment ij to count the active ones
-                properly, but we need a flag (-1) to know to skip these
-                later */
-                actuator_mapping[ij] = -1;
-                ij++;
-           }
+           ij++;
          }
       }
       fits_close_file(fptr, &status);
@@ -406,6 +399,10 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
     /* get actuator mapping from 2D cacao image to 1D vector for
     ALPAO input */
     actuator_mapping = (int *) malloc(ActCount * sizeof(int)); /* memory for actuator mapping */
+    /* initialize to -1 to allow for handling addressable but ignored actuators */
+    for (idx=0; idx<ActCount; idx++) {
+        actuator_mapping[idx] = -1;
+    }
     get_actuator_mapping(serial_number, ActCount, actuator_mapping);
 
     // initialize shared memory image to 0s
