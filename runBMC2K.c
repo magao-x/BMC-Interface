@@ -143,11 +143,11 @@ void clip_to_limits(float * command, uint32_t ActCount)
     {
         if (command[idx] > 1.0)
         {
-            printf("Actuator %d saturated!\n", idx + 1);
+        //    printf("Actuator %d saturated!\n", idx + 1);
             command[idx] = 1.0;
         } else if (command[idx] < 0.0)
         {
-            printf("Actuator %d saturated!\n", idx + 1);
+        //    printf("Actuator %d saturated!\n", idx + 1);
             command[idx] = 0.0;
         }
     }
@@ -339,6 +339,10 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, float bias, int li
         command_double[idx] = (double)command[idx];
     }
 
+    //for (idx = 0; idx < ActCount; idx++) {
+    //    printf("Act %d: %f\n", idx, command_double[idx]);
+    //}
+
     // Send command
     rv = BMCSetArray(&hdm, command_double, map_lut);
     // Check for errors
@@ -443,7 +447,7 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
 
     // control loop
     while (!stop) {
-        printf("BMC %s: waiting on commands.\n", serial_number);
+        //printf("BMC %s: waiting on commands.\n", serial_number);
         // Wait on semaphore update
         ImageStreamIO_semwait(&SMimage[0], 0);
         
