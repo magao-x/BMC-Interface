@@ -284,17 +284,14 @@ int get_actuator_mapping(const char * serial_number, int nbAct, int * actuator_m
     return 0;
 }
 
-BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, float bias, int linear, int fractional, float act_gain, float volume_factor, int * actuator_mapping) {
+BMCRC sendCommand(DM hdm, float *command, double *command_double, uint32_t *map_lut, IMAGE * SMimage, float bias, int linear, int fractional, float act_gain, float volume_factor, int * actuator_mapping, uint32_t ActCount) {
     // Initialize variables
-    float *command;
-    double *command_double;
     int idx, address;
-    uint32_t ActCount;
     BMCRC rv;
 
     // Map from 2D cacao image to 1D command vector
-    ActCount = (uint32_t)hdm.ActCount;
-    command = (float*)calloc(ActCount, sizeof(float));
+    //ActCount = (uint32_t)hdm.ActCount;
+    //command = (float*)calloc(ActCount, sizeof(float));
     for (idx = 0; idx < ActCount; idx++) {
          // use actuator mapping to pull correct element of shared memory image
         address = actuator_mapping[idx];
@@ -334,7 +331,7 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, float bias, int li
 
     /* convert to double (there's probably a better way than this loop)
     since that's what the BMC SDK expects */
-    command_double = (double*)calloc(ActCount, sizeof(double));
+    //command_double = (double*)calloc(ActCount, sizeof(double));
     for (idx = 0; idx < ActCount; idx++) {
         command_double[idx] = (double)command[idx];
     }
@@ -351,9 +348,6 @@ BMCRC sendCommand(DM hdm, uint32_t *map_lut, IMAGE * SMimage, float bias, int li
         return rv;
     }
 
-    // Clean up
-    free(command);
-
     return 0;
 }
 
@@ -369,6 +363,10 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
     IMAGE * SMimage;
     int *actuator_mapping; // 50x50 image to 1D vector of commands
     uint32_t shm_dim = 50; // Hard-coded for now
+
+    // command vectors
+    float *command;
+    double *command_double;
 
     float act_gain, volume_factor; // calibration
 
@@ -429,10 +427,14 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
         return -1;
     }
 
+    // initialize command vectors outside of the control loop
+    command = (float*)calloc(ActCount, sizeof(float));
+    command_double = (double*)calloc(ActCount, sizeof(double));
+
     // set DM to all-0 state to begin
     printf("BMC %s: initializing all actuators to 0.\n", serial_number);
     ImageStreamIO_semwait(&SMimage[0], 0);
-    rv  = sendCommand(hdm, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping);
+    rv  = sendCommand(hdm, command, command_double, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
     if (rv) {
         printf("Error %d sending command.\n", rv);
         return rv;
@@ -453,13 +455,16 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
         
         // Send Command to DM
         if (!stop) { // Skip DM on interrupt signal
-            rv = sendCommand(hdm, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping);
+            rv = sendCommand(hdm, command, command_double, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
             if (rv) {
                 printf("Error %d sending command.\n", rv);
                 return rv;
             }
         }
     }
+
+    free(command);
+    free(command_double);
 
     // Safe DM shutdown on loop interrupt
     // Zero all actuators
