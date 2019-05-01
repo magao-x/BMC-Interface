@@ -135,22 +135,14 @@ void bias_inputs(float * command, float bias, uint32_t ActCount)
 
 /* Convert any DM inputs to [0, 1] to avoid 
 exceeding safe DM operation. */
-void clip_to_limits(float * command, uint32_t ActCount)
+double clip_to_limits(double command)
 {
-    int idx;
-    // check each actuator and clip if needed
-    for ( idx = 0 ; idx < ActCount ; idx++)
-    {
-        if (command[idx] > 1.0)
-        {
-        //    printf("Actuator %d saturated!\n", idx + 1);
-            command[idx] = 1.0;
-        } else if (command[idx] < 0.0)
-        {
-        //    printf("Actuator %d saturated!\n", idx + 1);
-            command[idx] = 0.0;
-        }
+    if (command > 1.0) {
+        command = 1.0;
+    } else if (command < 0.0) {
+        command = 0.0;
     }
+    return command;
 }
 
 /* Read in a configuration file with user-calibrated
@@ -284,16 +276,16 @@ int get_actuator_mapping(const char * serial_number, int nbAct, int * actuator_m
     return 0;
 }
 
-BMCRC sendCommand(DM hdm, float *command, double *command_double, uint32_t *map_lut, IMAGE * SMimage, float bias, int linear, int fractional, float act_gain, float volume_factor, int * actuator_mapping, uint32_t ActCount) {
+BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, double bias, int linear, int fractional, float act_gain, float volume_factor, int * actuator_mapping, uint32_t ActCount) {
     // Initialize variables
     int idx, address;
     BMCRC rv;
+    double mean;
 
-    // Map from 2D cacao image to 1D command vector
-    //ActCount = (uint32_t)hdm.ActCount;
-    //command = (float*)calloc(ActCount, sizeof(float));
+    // Loop 1: pull command from shared memory and scale/convert as requested
     for (idx = 0; idx < ActCount; idx++) {
-         // use actuator mapping to pull correct element of shared memory image
+
+        // use actuator mapping to pull correct element of shared memory image
         address = actuator_mapping[idx];
         if (address == -1) {
             /* addressable but ignored actuators should
@@ -303,45 +295,60 @@ BMCRC sendCommand(DM hdm, float *command, double *command_double, uint32_t *map_
         else {
             /* addressable and active actuators have an integer
             address to their location in the command vector */
-            command[idx] = (float)SMimage[0].array.F[address];
+            command[idx] = (double)SMimage[0].array.F[address]; // test if you can get rid of the double
         }
+
+        /* If inputs are given in microns, convert from micronts
+        to fractional volts */ 
+        if (fractional == 0) {
+            command[idx] *= volume_factor / act_gain;
+        }
+
+        /* Keep track of the mean. Only used if we're explicitly
+        biasing the inputs */
+        mean += command[idx];
     }
 
-    // Convert stroke inputs from microns to fractional volts 
-    if (fractional == 0)
-    {
-        scale_inputs(command, ActCount, volume_factor / act_gain);
-    }
+    mean /= ActCount;
 
-    // Apply the bias
-    if (bias > 0.) {
-        bias_inputs(command, bias, ActCount);
-    }
+    /* Loop 2: apply a bias (if requested), clip commands to safe limits, and
+    take the sqrt (if requested), */
+    for (idx = 0; idx < ActCount; idx++) {
 
-    /* Clip to limits (must happen before square root to avoid
-    invalid entries) */
-    clip_to_limits(command, ActCount);
+        /* Note that the bias is applied in fractional volts before sqrt,
+        so it can mean different things:
+        Bias = 0.5 with linear==1 -> 0.5 fractional volts applied to DM
+        Bias = 0.5 with linear==0 (default) -> 0.7 fractional volts applied to DM
+        */
+        if (bias > 0.) {
+            // Remove the mean from the commands and apply the requested bias
+            command[idx] += bias - mean;
+        }
 
-    // Take the square root to linearize displacement
-    if (linear == 0) {
-        for (idx = 0; idx < ActCount; idx++) {
+        /* Clip to limits (0, 1)
+        Must happen before square root to avoid invalid entries from sqrt(-x)
+        but after the bias to avoid clipping commands that would be shifted
+        to valid values by the bias
+        */
+        clip_to_limits(command[idx]);
+
+        /* If requested, take the sqrt of inputs. If inputs
+        are given in microns, you should always take the sqrt
+        (otherwise the conversion is nonsense), but I'm not
+        enforcing this since the option to send fractional volts 
+        with and without the sqrt option is useful */
+        if (linear == 0) {
             command[idx] =  sqrt(command[idx]);
         }
     }
 
-    /* convert to double (there's probably a better way than this loop)
-    since that's what the BMC SDK expects */
-    //command_double = (double*)calloc(ActCount, sizeof(double));
-    for (idx = 0; idx < ActCount; idx++) {
-        command_double[idx] = (double)command[idx];
-    }
 
     //for (idx = 0; idx < ActCount; idx++) {
-    //    printf("Act %d: %f\n", idx, command_double[idx]);
+    //    printf("Act %d: %f\n", idx, command[idx]);
     //}
 
     // Send command
-    rv = BMCSetArray(&hdm, command_double, map_lut);
+    rv = BMCSetArray(&hdm, command, map_lut);
     // Check for errors
     if(rv) {
         printf("Error %d sending voltages.\n", rv);
@@ -352,7 +359,7 @@ BMCRC sendCommand(DM hdm, float *command, double *command_double, uint32_t *map_
 }
 
 // intialize DM and shared memory and enter DM command loop
-int controlLoop(const char * serial_number, const char * shm_name, float bias, int linear, int fractional) {
+int controlLoop(const char * serial_number, const char * shm_name, double bias, int linear, int fractional) {
 
     // Initialize variables
     DM hdm = {};
@@ -364,9 +371,8 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
     int *actuator_mapping; // 50x50 image to 1D vector of commands
     uint32_t shm_dim = 50; // Hard-coded for now
 
-    // command vectors
-    float *command;
-    double *command_double;
+    // command vector
+    double *command;
 
     float act_gain, volume_factor; // calibration
 
@@ -379,7 +385,6 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
     }
 
     // Open driver
-    //char serial_number[12] = "27BW027#081";
     rv = BMCOpen(&hdm, serial_number);
     // Check for errors
     if(rv) {
@@ -428,13 +433,12 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
     }
 
     // initialize command vectors outside of the control loop
-    command = (float*)calloc(ActCount, sizeof(float));
-    command_double = (double*)calloc(ActCount, sizeof(double));
+    command = (double*)calloc(ActCount, sizeof(double));
 
     // set DM to all-0 state to begin
     printf("BMC %s: initializing all actuators to 0.\n", serial_number);
     ImageStreamIO_semwait(&SMimage[0], 0);
-    rv  = sendCommand(hdm, command, command_double, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
+    rv  = sendCommand(hdm, command, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
     if (rv) {
         printf("Error %d sending command.\n", rv);
         return rv;
@@ -455,7 +459,7 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
         
         // Send Command to DM
         if (!stop) { // Skip DM on interrupt signal
-            rv = sendCommand(hdm, command, command_double, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
+            rv = sendCommand(hdm, command, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
             if (rv) {
                 printf("Error %d sending command.\n", rv);
                 return rv;
@@ -464,7 +468,6 @@ int controlLoop(const char * serial_number, const char * shm_name, float bias, i
     }
 
     free(command);
-    free(command_double);
 
     // Safe DM shutdown on loop interrupt
     // Zero all actuators
@@ -508,7 +511,7 @@ static struct argp_option options[] = {
 struct arguments
 {
   char *args[2];                /* serial shm_name*/
-  float bias;
+  double bias;
   int linear, fractional;
 };
 
