@@ -252,7 +252,7 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
             command[idx] = (double)SMimage[0].array.F[address]; // test if you can get rid of the double
         }
 
-        /* If inputs are given in microns, convert from micronts
+        /* If inputs are given in microns, convert from microns
         to fractional volts.
 
         Longer explanation:
@@ -273,41 +273,61 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
         /* Keep track of the mean. Only used if we're explicitly
         biasing the inputs */
         mean += command[idx];
+
+
+        /* When we're not setting the bias, we can get away with a single
+        for-loop.
+        If we are setting the bias, we need to apply it before computing
+        these values */
+        if (bias == 0) {
+            /* Clip to limits (0, 1)
+            Must happen before square root to avoid invalid entries from sqrt(-x)
+            */
+            clip_to_limits(command[idx]);
+
+            /* If requested, take the sqrt of inputs. If inputs
+            are given in microns, you should always take the sqrt
+            (otherwise the conversion is nonsense), but I'm not
+            enforcing this since the option to send fractional volts 
+            with and without the sqrt option is useful */
+            if (linear == 0) {
+                command[idx] =  sqrt(command[idx]);
+            }
+
+        }
     }
 
-    mean /= ActCount;
+    /* Loop 2: If we're applying a bias, we need a second loop
+    which applies the bias before clipping and taking the sqrt.
+    */
+    if (bias > 0.) {
+        mean /= ActCount;
+        for (idx = 0; idx < ActCount; idx++) {
 
-    /* Loop 2: apply a bias (if requested), clip commands to safe limits, and
-    take the sqrt (if requested), */
-    for (idx = 0; idx < ActCount; idx++) {
-
-        /* Note that the bias is applied in fractional volts before sqrt,
-        so it can mean different things:
-        Bias = 0.5 with linear==1 -> 0.5 fractional volts applied to DM
-        Bias = 0.5 with linear==0 (default) -> 0.7 fractional volts applied to DM
-        */
-        if (bias > 0.) {
-            // Remove the mean from the commands and apply the requested bias
+            /* Note that the bias is applied in fractional volts before sqrt,
+            so it can mean different things in different scenarios:
+            Bias = 0.5 with linear==1 -> 0.5 fractional volts applied to DM
+            Bias = 0.5 with linear==0 (default) -> 0.7 fractional volts applied to DM
+            */
             command[idx] += bias - mean;
-        }
 
-        /* Clip to limits (0, 1)
-        Must happen before square root to avoid invalid entries from sqrt(-x)
-        but after the bias to avoid clipping commands that would be shifted
-        to valid values by the bias
-        */
-        clip_to_limits(command[idx]);
+            /* Clip to limits (0, 1)
+            Must happen before square root to avoid invalid entries from sqrt(-x)
+            but after the bias to avoid clipping commands that would be shifted
+            to valid values by the bias
+            */
+            clip_to_limits(command[idx]);
 
-        /* If requested, take the sqrt of inputs. If inputs
-        are given in microns, you should always take the sqrt
-        (otherwise the conversion is nonsense), but I'm not
-        enforcing this since the option to send fractional volts 
-        with and without the sqrt option is useful */
-        if (linear == 0) {
-            command[idx] =  sqrt(command[idx]);
+            /* If requested, take the sqrt of inputs. If inputs
+            are given in microns, you should always take the sqrt
+            (otherwise the conversion is nonsense), but I'm not
+            enforcing this since the option to send fractional volts 
+            with and without the sqrt option is useful */
+            if (linear == 0) {
+                command[idx] =  sqrt(command[idx]);
+            }
         }
     }
-
 
     //for (idx = 0; idx < ActCount; idx++) {
     //    printf("Act %d: %f\n", idx, command[idx]);
@@ -323,6 +343,7 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
 
     return 0;
 }
+
 
 // intialize DM and shared memory and enter DM command loop
 int controlLoop(const char * serial_number, const char * shm_name, double bias, int linear, int fractional) {
