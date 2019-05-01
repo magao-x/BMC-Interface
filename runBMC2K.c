@@ -86,52 +86,6 @@ void initializeSharedMemory(const char * shm_name, uint32_t ax1, uint32_t ax2)
     SMimage[0].md[0].cnt1++;
 }
 
-/* BMC expects inputs between 0 and +1, but we'd like to provide
-stroke values in physical units. This function makes two conversions:
-1. It converts from microns of stroke to fractional voltage. 
-2. It normalizes inputs such that volume displaced by the requested command roughly
-matches the equivalent volume that would be displaced by a cuboid of dimensions
-actuator-pitch x actuator-pitch x normalized-stroke. This is a constant factor 
-that's found by calculating the volume under the DM influence function.
-
-This requires DM calibration.
- */
-void scale_inputs(float * command, uint32_t ActCount, float scale)
-{
-    int idx;
-    // normalize each actuator stroke
-    for ( idx = 0 ; idx < ActCount ; idx++)
-    {
-        command[idx] *= scale;
-    }
-}
-
-/* Remove DC bias in inputs to maximize actuator range.
-There's something not quite right about my approach.
-Ex: requesting full stroke on one actuation only
-slightly changes the avg, so it gets clipped
-at some value very short of full stroke. */
-void bias_inputs(float * command, float bias, uint32_t ActCount)
-{
-    int idx;
-    float mean;
-
-    // calculate mean value
-    mean = 0;
-    for ( idx = 0 ; idx < ActCount ; idx++)
-    {
-        mean += command[idx];
-    }
-    mean /= ActCount;
-
-    /* Remove mean from each actuator input
-    and add voltage bias to center of range.
-    */
-    for ( idx = 0 ; idx < ActCount ; idx++)
-    {
-        command[idx] += bias - mean;
-    }
-}
 
 /* Convert any DM inputs to [0, 1] to avoid 
 exceeding safe DM operation. */
@@ -299,7 +253,19 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
         }
 
         /* If inputs are given in microns, convert from micronts
-        to fractional volts */ 
+        to fractional volts.
+
+        Longer explanation:
+        BMC expects inputs between 0 and +1, but we'd like to provide
+        stroke values in physical units. This step makes two conversions:
+        1. It converts from microns of stroke to fractional voltage. 
+        2. It normalizes inputs such that volume displaced by the requested command roughly
+        matches the equivalent volume that would be displaced by a cuboid of dimensions
+        actuator-pitch x actuator-pitch x normalized-stroke. This is a constant factor 
+        that's found by calculating the volume under the DM influence function.
+
+        This requires DM calibration.
+         */
         if (fractional == 0) {
             command[idx] *= volume_factor / act_gain;
         }
