@@ -230,7 +230,13 @@ int get_actuator_mapping(const char * serial_number, int nbAct, int * actuator_m
     return 0;
 }
 
+struct timespec t0;
+struct timespec t1;
+struct timespec t2;
 BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, double bias, int linear, int fractional, float act_gain, float volume_factor, int * actuator_mapping, uint32_t ActCount) {
+   //clock_gettime(CLOCK_REALTIME, &t0);
+
+
     // Initialize variables
     int idx, address;
     BMCRC rv;
@@ -283,7 +289,7 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
             /* Clip to limits (0, 1)
             Must happen before square root to avoid invalid entries from sqrt(-x)
             */
-            clip_to_limits(command[idx]);
+            command[idx] = clip_to_limits(command[idx]);
 
             /* If requested, take the sqrt of inputs. If inputs
             are given in microns, you should always take the sqrt
@@ -316,7 +322,7 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
             but after the bias to avoid clipping commands that would be shifted
             to valid values by the bias
             */
-            clip_to_limits(command[idx]);
+            command[idx] = clip_to_limits(command[idx]);
 
             /* If requested, take the sqrt of inputs. If inputs
             are given in microns, you should always take the sqrt
@@ -333,14 +339,17 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
     //    printf("Act %d: %f\n", idx, command[idx]);
     //}
 
+    
+  // clock_gettime(CLOCK_REALTIME, &t1);
+
     // Send command
-    rv = BMCSetArray(&hdm, command, map_lut);
+    rv = BMCSetArray(&hdm, command, NULL);
     // Check for errors
     if(rv) {
         printf("Error %d sending voltages.\n", rv);
         return rv;
     }
-
+    //clock_gettime(CLOCK_REALTIME, &t2);
     return 0;
 }
 
@@ -437,7 +446,9 @@ int controlLoop(const char * serial_number, const char * shm_name, double bias, 
     action.sa_handler = handle_signal;
     sigaction(SIGINT, &action, NULL);
     stop = 0;
-
+    double dt_loop = 0;
+    double dt_com = 0;
+    int times = 0;
     // control loop
     while (!stop) {
         //printf("BMC %s: waiting on commands.\n", serial_number);
@@ -451,6 +462,19 @@ int controlLoop(const char * serial_number, const char * shm_name, double bias, 
                 printf("Error %d sending command.\n", rv);
                 return rv;
             }
+
+/*            dt_loop += ((double) t1.tv_sec + ((double) t1.tv_nsec)/1e9) - ((double) t0.tv_sec + ((double) t0.tv_nsec)/1e9);
+
+            dt_com += ((double) t2.tv_sec + ((double) t2.tv_nsec)/1e9) - ((double) t1.tv_sec + ((double) t1.tv_nsec)/1e9);
+            ++times;
+            if(times == 1000)
+            {
+               printf("%f  %f\n", dt_loop/1000., dt_com/1000.);
+               dt_loop = 0;
+               dt_com = 0;
+               times = 0;
+            }
+*/
         }
     }
 
