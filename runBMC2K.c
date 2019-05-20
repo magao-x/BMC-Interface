@@ -255,7 +255,7 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
         else {
             /* addressable and active actuators have an integer
             address to their location in the command vector */
-            command[idx] = (double)SMimage[0].array.F[address]; // test if you can get rid of the double
+            command[idx] = SMimage[0].array.F[address];
         }
 
         /* If inputs are given in microns, convert from microns
@@ -339,8 +339,8 @@ BMCRC sendCommand(DM hdm, double *command, uint32_t *map_lut, IMAGE * SMimage, d
     //    printf("Act %d: %f\n", idx, command[idx]);
     //}
 
-    
-  // clock_gettime(CLOCK_REALTIME, &t1);
+
+   // clock_gettime(CLOCK_REALTIME, &t1);
 
     // Send command
     rv = BMCSetArray(&hdm, command, NULL);
@@ -436,7 +436,8 @@ int controlLoop(const char * serial_number, const char * shm_name, double bias, 
     ImageStreamIO_semwait(&SMimage[0], 0);
     rv  = sendCommand(hdm, command, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
     if (rv) {
-        printf("Error %d sending command.\n", rv);
+        //printf("Error %d sending command.\n", rv);
+        printf("%s\n\n", BMCErrorString(rv));
         return rv;
     }
 
@@ -460,6 +461,7 @@ int controlLoop(const char * serial_number, const char * shm_name, double bias, 
             rv = sendCommand(hdm, command, map_lut, SMimage, bias, linear, fractional, act_gain, volume_factor, actuator_mapping, ActCount);
             if (rv) {
                 printf("Error %d sending command.\n", rv);
+                printf("%s\n\n", BMCErrorString(rv));
                 return rv;
             }
 
@@ -584,7 +586,8 @@ int main(int argc, char* argv[]) {
 
     BMCRC rv = controlLoop(arguments.args[0], arguments.args[1], arguments.bias, arguments.linear, arguments.fractional);
     if (rv) {
-        printf("Encountered error %d.\n", rv);
+        //printf("Encountered error %d.\n", rv);
+        printf("%s\n\n", BMCErrorString(rv));
         return rv;
     }
 
