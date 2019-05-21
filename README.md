@@ -1,9 +1,11 @@
 # BMC-Interface
 Interface the modern BMC API with cacao
 
-To compile with cacao and the BMC SDK:
+To compile with cacao and the BMC SDK on exao2:
 
-    gcc -o build/runBMC2K runBMC2K.c -I/opt/Boston\ Micromachines/include -L/opt/Boston\ Micromachines/lib -Wl,-rpath-link,/opt/Boston\ Micromachines/lib -lBMC -lBMC_PCIeAPI -lncurses -lImageStreamIO -lpthread -lrt -lm -lcfitsio
+    gcc -O3 -o build/runBMC2K runBMC2K.c -lopencv_core -lopencv_imgproc -laprutil-1 -Wl,-rpath /home/kvangorkom/BMC-interface/ -I/opt/Boston\ Micromachines/include -L/opt/Boston\ Micromachines/lib -Wl,-rpath-link,/opt/Boston\ Micromachines/lib -lBMC -lBMC_PCIeAPI -lncurses -lImageStreamIO -lrt -lcfitsio -lpthread -lm
+
+with libstdc++.so.6.0.21 in /home/kvangorkom/BMC-interface (linked as libstdc++.so.6 in the same directory — the rpath must point to the directory with libstdc++).
     
 To enter the control loop with the default settings:
 
