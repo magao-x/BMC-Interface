@@ -103,7 +103,7 @@ double clip_to_limits(double command)
 values to determine the conversion from physical to
 fractional stroke as well as the volume displaced by
 the influence function. */
-int parse_calibration_file(const char * serial, float *act_gain, float *volume_factor)
+int parse_calibration_file(const char * serial, uint32_t *shm_dim, float *act_gain, float *volume_factor)
 {
     char * bmc_calib;
     char calibpath[1000];
@@ -145,10 +145,14 @@ int parse_calibration_file(const char * serial, float *act_gain, float *volume_f
     fclose(fp);
 
     // assign stroke and volume factors
-    (*act_gain) = calibvals[0];
-    (*volume_factor) = calibvals[1];
+    (*shm_dim) = calibvals[0];
+    (*act_gain) = calibvals[1];
+    (*volume_factor) = calibvals[2];
 
-    printf("BMC %s: Using stroke and volume calibration from %s\n", serial, calibpath);
+    printf("BMC %s: Using dimensions, stroke, and volume calibration from %s\n", serial, calibpath);
+    printf("BMC %s: dim: %dx%d\n", serial, *shm_dim, *shm_dim);
+    printf("BMC %s: act_gain: %f\n", serial, *act_gain);
+    printf("BMC %s: volume_factor: %f\n", serial, *volume_factor);
     return 0;
 }
 
@@ -374,7 +378,7 @@ int controlLoop(const char * serial_number, const char * shm_name, double bias, 
 
     /* get actuator gain and volume normalization factor from
     the user-defined config file */
-    rv = parse_calibration_file(serial_number, &act_gain, &volume_factor);
+    rv = parse_calibration_file(serial_number, &shm_dim, &act_gain, &volume_factor);
     if (rv == -1)
     {
         return -1;
